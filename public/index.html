@@ -1,0 +1,1123 @@
+<!DOCTYPE html>
+<!--
+  Paris Trees Map — static SPA
+  Data: download trees.json from Paris Open Data and place it next to this file.
+  URL: https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/les-arbres/exports/geojson
+  Serve with any static file server, e.g.:  python3 -m http.server -d public
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Paris Trees Map</title>
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" crossorigin="">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" crossorigin="">
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Helvetica Neue', Arial, sans-serif;
+      color: #333;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* ── Loading overlay ────────────────────────── */
+    #loading-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(255,255,255,0.85);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .loading-spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid #E5E5E5;
+      border-top-color: #1565C0;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading-text {
+      font-size: 14px;
+      color: #555;
+    }
+
+    /* ── Error banner ───────────────────────────── */
+    #error-banner {
+      display: none;
+      background: #d32f2f;
+      color: #fff;
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+
+    /* ── Controls bar ───────────────────────────── */
+    #controls {
+      background: #fff;
+      border-bottom: 1px solid #E5E5E5;
+      padding: 10px 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.04);
+      z-index: 1000;
+      position: relative;
+    }
+
+    .genus-search-container {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      height: 36px;
+      width: 180px;
+      padding: 0 10px;
+      background: #F9F9F9;
+      border: 1px solid #E5E5E5;
+      border-radius: 6px;
+      flex-shrink: 0;
+    }
+
+    .genus-search-container:focus-within {
+      border-color: #1565C0;
+      outline: none;
+    }
+
+    .genus-search-container input {
+      border: none;
+      outline: none;
+      background: transparent;
+      font-family: inherit;
+      font-size: 13px;
+      color: #333;
+      flex: 1;
+      min-width: 0;
+      padding: 0;
+      touch-action: manipulation;
+    }
+
+    .genus-search-container input::placeholder { color: #888; }
+
+    #genus-clear-btn {
+      border: none;
+      background: transparent;
+      padding: 4px;
+      cursor: pointer;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      color: #888;
+      line-height: 0;
+      min-height: auto;
+      min-width: auto;
+    }
+
+    .species-select-wrapper {
+      position: relative;
+      height: 36px;
+      min-width: 130px;
+      flex-shrink: 0;
+    }
+
+    #species-select {
+      height: 36px;
+      min-width: 130px;
+      width: 100%;
+      padding: 0 28px 0 10px;
+      background: #F9F9F9;
+      border: 1px solid #E5E5E5;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 13px;
+      color: #bbb;
+      appearance: none;
+      -webkit-appearance: none;
+      cursor: not-allowed;
+      touch-action: manipulation;
+    }
+
+    #species-select:not(:disabled) {
+      background: #fff;
+      color: #333;
+      cursor: pointer;
+    }
+
+    .species-select-chevron {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      pointer-events: none;
+      display: flex;
+      color: #ccc;
+    }
+
+    .species-select-wrapper:has(#species-select:not(:disabled)) .species-select-chevron {
+      color: #333;
+    }
+
+    #clear-filter-btn {
+      height: 36px;
+      padding: 0 14px;
+      background: #fff;
+      border: 1px solid #E5E5E5;
+      border-radius: 6px;
+      color: #333;
+      font-size: 13px;
+      font-family: inherit;
+      cursor: pointer;
+      min-height: auto;
+      min-width: auto;
+      touch-action: manipulation;
+    }
+
+    #clear-filter-btn:hover { background: #F9F9F9; }
+
+    .notable-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      height: 44px;
+      padding: 0 6px;
+      cursor: pointer;
+      font-size: 13px;
+      user-select: none;
+      touch-action: manipulation;
+    }
+
+    #remarkable-filter {
+      position: absolute;
+      opacity: 0;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+    }
+
+    .notable-checkbox-box {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      border: 1.5px solid #D4D4D4;
+      background: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: background 120ms, border-color 120ms;
+    }
+
+    .notable-checkbox-checkmark { display: none; }
+
+    #remarkable-filter:checked + .notable-checkbox-box {
+      background: #1565C0;
+      border-color: #1565C0;
+    }
+
+    #remarkable-filter:checked + .notable-checkbox-box .notable-checkbox-checkmark {
+      display: flex;
+    }
+
+    #nearby-btn {
+      height: 44px;
+      padding: 0 14px;
+      background: #1565C0;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: inherit;
+      cursor: pointer;
+      box-shadow: 0 1px 2px rgba(21,101,192,0.3);
+      flex-shrink: 0;
+      touch-action: manipulation;
+      min-height: auto;
+      min-width: auto;
+    }
+
+    #nearby-btn:hover { background: #1251a3; }
+    #nearby-btn.active { background: #0D47A1; }
+
+    #radius-controls {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding-top: 10px;
+      margin-top: 2px;
+      border-top: 1px dashed #E5E5E5;
+    }
+
+    #radius-label-wrap {
+      font-size: 12px;
+      color: #888;
+      font-variant-numeric: tabular-nums;
+      min-width: 78px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    #radius-label-wrap strong {
+      color: #333;
+      font-weight: 600;
+    }
+
+    .radius-slider-wrap {
+      flex: 1;
+      position: relative;
+      height: 24px;
+      display: flex;
+      align-items: center;
+    }
+
+    .radius-track {
+      position: absolute;
+      left: 0; right: 0;
+      height: 4px;
+      background: #E5E5E5;
+      border-radius: 2px;
+    }
+
+    .radius-fill {
+      position: absolute;
+      left: 0;
+      height: 4px;
+      background: #1565C0;
+      border-radius: 2px;
+      width: 3%;
+    }
+
+    .radius-thumb {
+      position: absolute;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      border: 2px solid #1565C0;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+      transform: translateX(-50%);
+      pointer-events: none;
+      left: 3%;
+    }
+
+    #radius-slider {
+      position: absolute;
+      width: 100%;
+      opacity: 0;
+      height: 24px;
+      cursor: pointer;
+      z-index: 2;
+      margin: 0;
+      touch-action: manipulation;
+    }
+
+    #clear-proximity-btn {
+      height: 28px;
+      padding: 0 10px;
+      background: #fff;
+      border: 1px solid #E5E5E5;
+      border-radius: 5px;
+      font-size: 12px;
+      color: #888;
+      cursor: pointer;
+      font-family: inherit;
+      min-height: auto;
+      min-width: auto;
+      flex-shrink: 0;
+      touch-action: manipulation;
+    }
+
+    #clear-proximity-btn:hover { background: #F9F9F9; }
+
+    #count-badge {
+      display: none;
+      background: #1565C0;
+      color: #fff;
+      padding: 0 10px;
+      height: 24px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      align-items: center;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    /* ── Map ────────────────────────────────────── */
+    #map {
+      flex: 1;
+      min-height: 0;
+      position: relative;
+    }
+
+    #zoom-message {
+      display: none;
+      position: absolute;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(33, 33, 33, 0.92);
+      color: #fff;
+      padding: 10px 18px;
+      border-radius: 22px;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+      white-space: nowrap;
+      z-index: 1000;
+      pointer-events: none;
+    }
+
+    /* ── Tree markers ────────────────────────────── */
+    .tree-marker {
+      position: relative;
+      background: #fff;
+      border: 1.5px solid #388E3C;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.18);
+    }
+
+    .tree-marker-label {
+      color: #1B5E20;
+      font-size: 10px;
+      font-weight: 600;
+      font-family: 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+      line-height: 1;
+      pointer-events: none;
+      letter-spacing: 0.02em;
+    }
+
+    .tree-marker-dim { opacity: 0.35; }
+
+    .tree-marker-notable-dot {
+      position: absolute;
+      top: -3px;
+      right: -3px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #C8960C;
+      border: 1px solid #fff;
+      box-shadow: 0 0 0 0.5px rgba(0,0,0,0.15);
+      pointer-events: none;
+    }
+
+    /* ── Species panel ───────────────────────────── */
+    #species-panel {
+      background: #F2F2F0;
+      border-bottom: 1px solid #E5E5E5;
+      max-height: 160px;
+      overflow: hidden;
+      display: none;
+      flex-direction: column;
+      transition: max-height 200ms ease;
+      position: relative;
+      z-index: 990;
+    }
+
+    #species-panel-header {
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      height: 38px;
+      flex-shrink: 0;
+    }
+
+    #species-panel-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #333;
+      flex: 0 0 auto;
+    }
+
+    #species-sort-controls {
+      flex: 1;
+      display: flex;
+      justify-content: center;
+      gap: 4px;
+    }
+
+    .sort-btn {
+      height: 24px;
+      padding: 0 10px;
+      background: #fff;
+      color: #333;
+      border: 1px solid #E5E5E5;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      touch-action: manipulation;
+      min-height: auto;
+      min-width: auto;
+    }
+
+    .sort-btn.active {
+      background: #1565C0;
+      color: #fff;
+      border-color: #1565C0;
+    }
+
+    #species-panel-toggle {
+      width: 28px;
+      height: 28px;
+      border: none;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      min-height: auto;
+      min-width: auto;
+      padding: 0;
+    }
+
+    #panel-chevron { transition: transform 200ms ease; }
+    #species-panel.collapsed #panel-chevron { transform: rotate(-90deg); }
+
+    #species-panel-body {
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 4px 12px 10px;
+    }
+
+    #species-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    #species-list li {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      background: #fff;
+      border: 1px solid #E5E5E5;
+      border-radius: 6px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    #species-list li em { font-style: italic; color: #333; }
+    #species-list li .common-name { color: #888; margin-left: 2px; }
+    #species-list li span.count { color: #1565C0; font-weight: 700; font-variant-numeric: tabular-nums; }
+    #species-list li span.closest { color: #888; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+    #species-panel.collapsed { max-height: 38px; }
+    #species-panel.collapsed #species-panel-body { display: none; }
+
+    @media (max-width: 480px) {
+      #controls { padding: 8px 10px; gap: 6px; }
+      .genus-search-container { width: 150px; }
+      #species-panel { max-height: 130px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading-overlay">
+    <div class="loading-spinner"></div>
+    <div class="loading-text">Loading tree data…</div>
+  </div>
+
+  <div id="app">
+    <div id="error-banner"></div>
+
+    <div id="controls">
+      <div class="genus-search-container">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.5" stroke="#888" stroke-width="1.5"/>
+          <path d="M10.5 10.5L13.5 13.5" stroke="#888" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <input type="text" id="genus-input" list="genus-datalist"
+               placeholder="Search genus…" autocomplete="off">
+        <datalist id="genus-datalist"></datalist>
+        <button id="genus-clear-btn" aria-label="Clear genus">
+          <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
+            <path d="M3 3l6 6M9 3l-6 6" stroke="#888" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="species-select-wrapper">
+        <select id="species-select" title="Filter by species" disabled>
+          <option value="">All species</option>
+        </select>
+        <span class="species-select-chevron" aria-hidden="true">
+          <svg width="12" height="12" viewBox="0 0 14 14">
+            <path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+      </div>
+
+      <button id="clear-filter-btn">Clear</button>
+
+      <label class="notable-label">
+        <input type="checkbox" id="remarkable-filter">
+        <span class="notable-checkbox-box">
+          <svg class="notable-checkbox-checkmark" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <path d="M2 5l2 2 4-4" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </span>
+        <span style="display:inline-flex;align-items:center;gap:4px;">
+          Notable only
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="#C8960C" aria-hidden="true">
+            <path d="M6 1l1.55 3.14 3.45.5-2.5 2.44.59 3.45L6 8.9l-3.09 1.63.59-3.45L1 4.64l3.45-.5L6 1z"/>
+          </svg>
+        </span>
+      </label>
+
+      <button id="nearby-btn">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M8 1.5C5.24 1.5 3 3.74 3 6.5c0 3.5 5 8 5 8s5-4.5 5-8c0-2.76-2.24-5-5-5z" stroke="#fff" stroke-width="1.5"/>
+          <circle cx="8" cy="6.5" r="1.75" fill="#fff"/>
+        </svg>
+        Find trees near me
+      </button>
+
+      <div id="radius-controls">
+        <span id="radius-label-wrap">Radius <strong><span id="radius-label">100</span> m</strong></span>
+        <div class="radius-slider-wrap">
+          <div class="radius-track"></div>
+          <div class="radius-fill" id="radius-fill"></div>
+          <div class="radius-thumb" id="radius-thumb"></div>
+          <input type="range" id="radius-slider" min="30" max="2000" step="10" value="100"
+                 aria-label="Proximity radius">
+        </div>
+        <button id="clear-proximity-btn">Clear</button>
+        <span id="count-badge"></span>
+      </div>
+    </div>
+
+    <div id="species-panel">
+      <div id="species-panel-header">
+        <span id="species-panel-title">Species found</span>
+        <span id="species-sort-controls">
+          <button id="sort-by-count" class="sort-btn active">By count</button>
+          <button id="sort-by-closest" class="sort-btn">By distance</button>
+        </span>
+        <button id="species-panel-toggle" aria-label="Toggle species panel">
+          <svg id="panel-chevron" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+            <path d="M3 5l4 4 4-4" stroke="#333" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+      <div id="species-panel-body">
+        <ul id="species-list"></ul>
+      </div>
+    </div>
+
+    <div id="map" style="position: relative;">
+      <div id="zoom-message">Zoom in to see trees</div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js" crossorigin=""></script>
+  <script>
+    'use strict';
+
+    // ── Constants ─────────────────────────────────────────────────────────────
+    const PARIS_CENTER = [48.8566, 2.3522];
+    const MIN_ZOOM = 14;
+    const EARTH_R = 6371000;
+
+    // ── State ─────────────────────────────────────────────────────────────────
+    let allTrees = [];
+    let speciesIndex = {};
+    let activeGenus = null;
+    let activeSpecies = null;
+    let remarkableOnly = false;
+    let proximityMode = false;
+    let userLocation = null;
+    let proximityCircle = null;
+    let userMarker = null;
+    let currentMarkers = {};
+    let dimMarkers = [];
+    let speciesSort = 'count';
+    let speciesData = [];
+
+    // ── Map init ──────────────────────────────────────────────────────────────
+    const map = L.map(document.getElementById('map'), { center: PARIS_CENTER, zoom: 12, maxZoom: 21 });
+    const clusterGroup = L.markerClusterGroup({ maxClusterRadius: 40 });
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 21, maxNativeZoom: 19
+    }).addTo(map);
+
+    map.addLayer(clusterGroup);
+    map.on('moveend zoomend', onMapMove);
+
+    setupControls();
+    setupSpeciesPanel();
+    updateZoomMessage();
+    loadTrees();
+
+    // ── Data loading ──────────────────────────────────────────────────────────
+    // trees.json can be either:
+    //   compact:  {"t": [[lat, lon, common_name, genus, species, address, height_m, circ_cm, remarkable], ...]}
+    //             generated by scripts/compact-trees.py (~15 MB)
+    //   geojson:  raw Paris Open Data GeoJSON (~100 MB)
+    async function loadTrees() {
+      document.getElementById('loading-overlay').style.display = 'flex';
+      try {
+        const res = await fetch('trees.json');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        if (Array.isArray(data.t)) {
+          // Compact format
+          let id = 0;
+          for (const r of data.t) {
+            allTrees.push({
+              id: ++id,
+              lat: r[0], lon: r[1],
+              common_name: r[2] || null,
+              genus: r[3] || null,
+              species: r[4] || null,
+              address: r[5] || null,
+              height_m: r[6] || null,
+              circumference_cm: r[7] || null,
+              remarkable: r[8] === 1
+            });
+          }
+        } else {
+          // GeoJSON fallback
+          let id = 0;
+          for (const f of (data.features || [])) {
+            const props = f.properties || {};
+            const geom = f.geometry;
+            if (!geom || geom.type !== 'Point' || !geom.coordinates || geom.coordinates.length < 2) continue;
+            const [lon, lat] = geom.coordinates;
+            const rv = props.remarquable;
+            allTrees.push({
+              id: ++id,
+              lat: +lat, lon: +lon,
+              common_name: props.libellefrancais || null,
+              genus: props.genre || null,
+              species: props.espece || null,
+              address: props.adresse || null,
+              height_m: +props.hauteurenm || null,
+              circumference_cm: +props.circonferenceencm || null,
+              remarkable: rv === true || rv === 'OUI' || rv === 'oui' || rv === '1' || rv === 1
+            });
+          }
+        }
+
+        buildSpeciesIndex();
+      } catch (e) {
+        if (!allTrees.length) {
+          showError('No tree data found. Download trees.json from Paris Open Data and place it here.');
+        }
+      } finally {
+        document.getElementById('loading-overlay').style.display = 'none';
+        updateZoomMessage();
+        onMapMove();
+      }
+    }
+
+    function buildSpeciesIndex() {
+      speciesIndex = {};
+      for (const t of allTrees) {
+        if (!t.genus) continue;
+        if (!speciesIndex[t.genus]) speciesIndex[t.genus] = [];
+        if (t.species && !speciesIndex[t.genus].some(s => s.epithet === t.species)) {
+          speciesIndex[t.genus].push({ epithet: t.species, common_name: t.common_name });
+        }
+      }
+      const datalist = document.getElementById('genus-datalist');
+      Object.keys(speciesIndex).sort().forEach(genus => {
+        const opt = document.createElement('option');
+        const firstCommon = speciesIndex[genus].find(s => s.common_name)?.common_name;
+        opt.value = firstCommon ? `${genus} (${firstCommon})` : genus;
+        datalist.appendChild(opt);
+      });
+    }
+
+    // ── In-memory queries ─────────────────────────────────────────────────────
+    function getTreesInBounds(limit = 500) {
+      const b = map.getBounds();
+      const s = b.getSouth(), n = b.getNorth(), w = b.getWest(), e = b.getEast();
+      const results = [];
+      for (const t of allTrees) {
+        if (t.lat < s || t.lat > n || t.lon < w || t.lon > e) continue;
+        if (activeGenus && t.genus !== activeGenus) continue;
+        if (activeSpecies && t.species !== activeSpecies) continue;
+        if (remarkableOnly && !t.remarkable) continue;
+        results.push(t);
+        if (results.length >= limit) break;
+      }
+      return results;
+    }
+
+    function getTreesNearby(lat, lon, radius) {
+      // Rough bounding box pre-filter to skip haversine on distant trees
+      const latD = radius / 111320;
+      const lonD = radius / (111320 * Math.cos(lat * Math.PI / 180));
+      const candidates = allTrees.filter(t =>
+        Math.abs(t.lat - lat) <= latD && Math.abs(t.lon - lon) <= lonD &&
+        (!activeGenus || t.genus === activeGenus) &&
+        (!activeSpecies || t.species === activeSpecies) &&
+        (!remarkableOnly || t.remarkable)
+      );
+      return candidates
+        .map(t => Object.assign({}, t, { distance_m: Math.round(haversine(lat, lon, t.lat, t.lon)) }))
+        .filter(t => t.distance_m <= radius)
+        .sort((a, b) => a.distance_m - b.distance_m);
+    }
+
+    function haversine(lat1, lon1, lat2, lon2) {
+      const dlat = (lat2 - lat1) * Math.PI / 180;
+      const dlon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dlat / 2) ** 2 +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dlon / 2) ** 2;
+      return EARTH_R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // ── Map movement ──────────────────────────────────────────────────────────
+    function onMapMove() {
+      updateZoomMessage();
+      if (map.getZoom() >= MIN_ZOOM) {
+        if (!proximityMode) renderViewport();
+        else renderViewportBackground();
+      }
+    }
+
+    function updateZoomMessage() {
+      document.getElementById('zoom-message').style.display =
+        (map.getZoom() < MIN_ZOOM && !proximityMode) ? 'block' : 'none';
+    }
+
+    function renderViewport() {
+      renderMarkers(getTreesInBounds());
+    }
+
+    function renderViewportBackground() {
+      renderMarkers(getTreesInBounds(), { dim: true });
+    }
+
+    function renderNearby() {
+      if (!userLocation) return;
+      const radius = parseInt(document.getElementById('radius-slider').value);
+      const trees = getTreesNearby(userLocation.lat, userLocation.lng, radius);
+
+      const bySpecies = {};
+      for (const t of trees) {
+        const sci = [t.genus, t.species].filter(Boolean).join(' ');
+        if (!sci) continue;
+        if (!bySpecies[sci]) bySpecies[sci] = { name: sci, common_name: t.common_name, count: 0, closest_m: Infinity };
+        bySpecies[sci].count++;
+        if (t.distance_m < bySpecies[sci].closest_m) bySpecies[sci].closest_m = t.distance_m;
+      }
+      const speciesCounts = Object.values(bySpecies).sort((a, b) => b.count - a.count);
+
+      updateProximityCircle(radius);
+      renderMarkers(trees);
+      showCountBadge(`${trees.length} trees within ${radius} m`);
+      showSpeciesPanel(speciesCounts);
+      renderViewportBackground();
+    }
+
+    // ── Markers ───────────────────────────────────────────────────────────────
+    function renderMarkers(trees, { dim = false } = {}) {
+      if (!dim) {
+        clusterGroup.clearLayers();
+        currentMarkers = {};
+        dimMarkers = [];
+      } else {
+        dimMarkers.forEach(m => clusterGroup.removeLayer(m));
+        dimMarkers = [];
+      }
+      for (const tree of trees) {
+        if (activeGenus && tree.genus !== activeGenus) continue;
+        if (activeSpecies && tree.species !== activeSpecies) continue;
+        if (remarkableOnly && !tree.remarkable) continue;
+        if (dim && currentMarkers[tree.id]) continue;
+
+        const marker = L.marker([tree.lat, tree.lon], { icon: treeIcon(tree, { dim }) });
+        marker.treeData = tree;
+        marker.bindPopup(buildPopup(tree));
+        if (!dim) currentMarkers[tree.id] = marker;
+        else dimMarkers.push(marker);
+        clusterGroup.addLayer(marker);
+      }
+    }
+
+    function filterExistingMarkers() {
+      for (const marker of Object.values(currentMarkers)) {
+        const t = marker.treeData;
+        const hidden =
+          (activeGenus && t.genus !== activeGenus) ||
+          (activeSpecies && t.species !== activeSpecies) ||
+          (remarkableOnly && !t.remarkable);
+        if (hidden) clusterGroup.removeLayer(marker);
+        else clusterGroup.addLayer(marker);
+      }
+    }
+
+    function treeIcon(tree, { dim = false } = {}) {
+      const g = tree.genus?.trim();
+      const rawS = tree.species?.trim();
+      const s = rawS && /^sp\.?p?\.?$/i.test(rawS) ? null : rawS;
+      const label = (g && s) ? g[0].toUpperCase() + s[0].toLowerCase() : (g ? g[0].toUpperCase() : '');
+      const dot = tree.remarkable ? '<span class="tree-marker-notable-dot"></span>' : '';
+      return L.divIcon({
+        className: `tree-marker${dim ? ' tree-marker-dim' : ''}`,
+        html: (label ? `<span class="tree-marker-label">${label}</span>` : '') + dot,
+        iconSize: [28, 22], iconAnchor: [14, 22], popupAnchor: [0, -22]
+      });
+    }
+
+    function buildPopup(tree) {
+      const lines = [];
+      if (tree.common_name) lines.push(`<strong>${tree.common_name}</strong>`);
+      if (tree.genus || tree.species) lines.push(`<em>${[tree.genus, tree.species].filter(Boolean).join(' ')}</em>`);
+      if (tree.address) lines.push(tree.address);
+      if (tree.height_m) lines.push(`Height: ${tree.height_m} m`);
+      if (tree.circumference_cm) lines.push(`Circumference: ${tree.circumference_cm} cm`);
+      if (tree.remarkable) lines.push("<span style='color:#c8960c;font-weight:bold'>⭐ Notable tree</span>");
+      if (tree.distance_m != null) lines.push(`Distance: ${tree.distance_m} m`);
+      return lines.join('<br>') || 'No details available';
+    }
+
+    // ── Proximity ─────────────────────────────────────────────────────────────
+    function startProximityMode() {
+      if (!navigator.geolocation) return showError('Geolocation is not supported by your browser.');
+      navigator.geolocation.getCurrentPosition(
+        pos => {
+          userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          proximityMode = true;
+          document.getElementById('radius-controls').style.display = 'inline-flex';
+          document.getElementById('zoom-message').style.display = 'none';
+          renderNearby();
+        },
+        () => showError('Location access denied. Map continues to work without proximity.')
+      );
+    }
+
+    function updateProximityCircle(radius) {
+      if (proximityCircle) proximityCircle.remove();
+      proximityCircle = L.circle(
+        [userLocation.lat, userLocation.lng],
+        { radius, color: '#1565C0', fillOpacity: 0.08 }
+      ).addTo(map);
+      map.fitBounds(proximityCircle.getBounds(), { padding: [20, 20] });
+      if (userMarker) userMarker.remove();
+      userMarker = L.circleMarker(
+        [userLocation.lat, userLocation.lng],
+        { radius: 8, color: '#fff', weight: 2, fillColor: '#1565C0', fillOpacity: 1 }
+      ).addTo(map).bindPopup('You are here');
+    }
+
+    function clearProximityMode() {
+      proximityMode = false;
+      userLocation = null;
+      if (proximityCircle) { proximityCircle.remove(); proximityCircle = null; }
+      if (userMarker) { userMarker.remove(); userMarker = null; }
+      document.getElementById('radius-controls').style.display = 'none';
+      document.getElementById('count-badge').style.display = 'none';
+      hideSpeciesPanel();
+      clusterGroup.clearLayers();
+      currentMarkers = {};
+      dimMarkers = [];
+      updateZoomMessage();
+      if (map.getZoom() >= MIN_ZOOM) renderViewport();
+    }
+
+    // ── Controls ──────────────────────────────────────────────────────────────
+    function setupControls() {
+      const genusInput = document.getElementById('genus-input');
+      const genusClearBtn = document.getElementById('genus-clear-btn');
+      const speciesSelect = document.getElementById('species-select');
+
+      // Genus clear button visibility
+      genusInput.addEventListener('input', () => {
+        genusClearBtn.style.display = genusInput.value ? 'flex' : 'none';
+      });
+      genusClearBtn.addEventListener('click', () => {
+        genusInput.value = '';
+        genusClearBtn.style.display = 'none';
+        genusInput.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+
+      const applyGenus = () => {
+        const genus = genusInput.value.trim().split(' (')[0].trim();
+        const resolved = speciesIndex[genus] ? genus : null;
+        if (resolved === activeGenus) return;
+        activeGenus = resolved;
+        activeSpecies = null;
+        speciesSelect.value = '';
+        populateSpeciesSelect(resolved);
+        filterExistingMarkers();
+        if (!proximityMode) renderViewport(); else renderNearby();
+      };
+
+      genusInput.addEventListener('change', applyGenus);
+      genusInput.addEventListener('input', () => {
+        if (!genusInput.value.trim()) {
+          activeGenus = null;
+          activeSpecies = null;
+          speciesSelect.value = '';
+          populateSpeciesSelect(null);
+          filterExistingMarkers();
+          if (!proximityMode) renderViewport(); else renderNearby();
+        }
+      });
+
+      speciesSelect.addEventListener('change', () => {
+        activeSpecies = speciesSelect.value || null;
+        filterExistingMarkers();
+        if (!proximityMode) renderViewport(); else renderNearby();
+      });
+
+      document.getElementById('clear-filter-btn').addEventListener('click', () => {
+        genusInput.value = '';
+        genusClearBtn.style.display = 'none';
+        speciesSelect.value = '';
+        speciesSelect.disabled = true;
+        activeGenus = null;
+        activeSpecies = null;
+        populateSpeciesSelect(null);
+        filterExistingMarkers();
+        if (!proximityMode) renderViewport(); else renderNearby();
+      });
+
+      document.getElementById('remarkable-filter').addEventListener('change', e => {
+        remarkableOnly = e.target.checked;
+        filterExistingMarkers();
+        if (!proximityMode) renderViewport(); else renderNearby();
+      });
+
+      document.getElementById('nearby-btn').addEventListener('click', startProximityMode);
+      document.getElementById('clear-proximity-btn').addEventListener('click', clearProximityMode);
+
+      // Radius slider
+      const radiusSlider = document.getElementById('radius-slider');
+      const radiusLabel = document.getElementById('radius-label');
+      const radiusFill = document.getElementById('radius-fill');
+      const radiusThumb = document.getElementById('radius-thumb');
+
+      function updateRadiusTrack() {
+        const pct = ((radiusSlider.value - radiusSlider.min) / (radiusSlider.max - radiusSlider.min)) * 100;
+        radiusFill.style.width = pct + '%';
+        radiusThumb.style.left = 'calc(' + pct + '% - 9px)';
+      }
+
+      radiusSlider.addEventListener('input', () => {
+        radiusLabel.textContent = radiusSlider.value;
+        updateRadiusTrack();
+      });
+      radiusSlider.addEventListener('change', () => { if (userLocation) renderNearby(); });
+      updateRadiusTrack();
+
+      // Nearby button active state
+      const radiusControls = document.getElementById('radius-controls');
+      const nearbyBtn = document.getElementById('nearby-btn');
+      new MutationObserver(() => {
+        nearbyBtn.classList.toggle('active',
+          radiusControls.style.display !== 'none' && radiusControls.style.display !== '');
+      }).observe(radiusControls, { attributes: true, attributeFilter: ['style'] });
+    }
+
+    function populateSpeciesSelect(genus) {
+      const sel = document.getElementById('species-select');
+      while (sel.options.length > 1) sel.remove(1);
+      if (!genus || !speciesIndex[genus]?.length) { sel.disabled = true; return; }
+      speciesIndex[genus].forEach(({ epithet }) => {
+        const opt = document.createElement('option');
+        opt.value = epithet;
+        opt.textContent = epithet;
+        sel.appendChild(opt);
+      });
+      sel.disabled = false;
+    }
+
+    // ── Species panel ─────────────────────────────────────────────────────────
+    function setupSpeciesPanel() {
+      const panel = document.getElementById('species-panel');
+      document.getElementById('species-panel-header').addEventListener('click', e => {
+        if (e.target.closest('.sort-btn')) return;
+        panel.classList.toggle('collapsed');
+      });
+      document.getElementById('sort-by-count').addEventListener('click', () => {
+        speciesSort = 'count'; updateSortButtons(); renderSpeciesList();
+      });
+      document.getElementById('sort-by-closest').addEventListener('click', () => {
+        speciesSort = 'closest'; updateSortButtons(); renderSpeciesList();
+      });
+    }
+
+    function updateSortButtons() {
+      document.getElementById('sort-by-count').classList.toggle('active', speciesSort === 'count');
+      document.getElementById('sort-by-closest').classList.toggle('active', speciesSort === 'closest');
+    }
+
+    function renderSpeciesList() {
+      const sorted = [...speciesData].sort(
+        speciesSort === 'closest' ? (a, b) => a.closest_m - b.closest_m : (a, b) => b.count - a.count
+      );
+      document.getElementById('species-list').innerHTML = sorted.map(s => {
+        const name = s.common_name
+          ? `<em>${s.name}</em><span class="common-name">${s.common_name}</span>`
+          : `<em>${s.name}</em>`;
+        return `<li>${name}<span class="count">×${s.count}</span><span class="closest">${s.closest_m} m</span></li>`;
+      }).join('');
+    }
+
+    function showSpeciesPanel(counts) {
+      speciesData = counts;
+      document.getElementById('species-panel-title').textContent = `Species found (${counts.length})`;
+      renderSpeciesList();
+      const panel = document.getElementById('species-panel');
+      panel.classList.remove('collapsed');
+      panel.style.display = 'flex';
+    }
+
+    function hideSpeciesPanel() {
+      document.getElementById('species-panel').style.display = 'none';
+    }
+
+    // ── UI helpers ────────────────────────────────────────────────────────────
+    function showCountBadge(text) {
+      const badge = document.getElementById('count-badge');
+      badge.textContent = text;
+      badge.style.display = 'inline-flex';
+    }
+
+    function showError(msg) {
+      const banner = document.getElementById('error-banner');
+      banner.textContent = msg;
+      banner.style.display = 'block';
+      setTimeout(() => { banner.style.display = 'none'; }, 6000);
+    }
+  </script>
+</body>
+</html>
